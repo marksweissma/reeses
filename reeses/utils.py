@@ -1,6 +1,6 @@
 import attr
 import inspect
-import variants
+from functools import lru_cache
 
 from collections import defaultdict
 from typing import Any, List
@@ -15,14 +15,27 @@ from sklearn.utils import check_random_state, check_array, compute_sample_weight
 from sklearn.ensemble import _forest as sk_forest
 
 
-def get_variant(variant, tree_instance, prediction_instance, ensemble_types):
-    if not variant:
-        if isinstance(tree_instance, ensemble_types):
-            variant = 'ensemble'
-        else:
-            variant = 'single'
-    return variant
+def _collect_leaf_indices(tree):
+    children_left = tree.children_left
+    children_right = tree.children_right
+    node_depth = [None] * tree.node_count
 
+    leaves = []
+
+    stack = [(0, 0)]
+    while len(stack):
+        node_id, depth = stack.pop()
+        node_depth[node_id] = depth
+
+        is_leaf = children_left[node_id] == children_right[node_id]
+        if is_leaf:
+            leaves.append(node_id)
+        else:
+            _depth = depth + 1
+            stack.append((children_left[node_id], _depth))
+            stack.append((children_right[node_id], _depth))
+
+    return leaves
 
 def _build_sample_weight(tree, reese, X, y, sample_weight, class_weight=None, n_samples_bootstrap=None):
     if getattr(reese.assignment_estimator, 'bootstrap', None):
@@ -57,24 +70,22 @@ class GroupAssignment:
     groups: List
 
     @classmethod
-    def from_groups(cls, groups, X):
-        data = defaultdict(list)
+    def from_groups(cls, groups, **kwargs):
+        data = {key: defaultdict(list) for key in kwargs}
         groups = list(groups)
-        [data[group].append(row) for group, row in zip(groups, X)]
-        return cls(data, groups)
+        group_ids = sorted(set(groups))
+        {key: [_data[group].append(row) for group, row in zip(groups, value)] for (key, value), _data in zip(kwargs.items(), data)}
+
+        return cls(data, groups, group_ids)
 
     @classmethod
-    def from_model(cls, model, X):
+    def from_model(cls, model, X, **kwargs):
         groups = model.apply(X)
-        return cls.from_groups(groups, X)
+        return cls.from_groups(groups, X=X, *kwargs)
 
-    @property
-    def leaves(self):
-        return list(self.data)
-
-    def reconstruct_from_groups(self, dict_arr):
+    def reconstruct_from_groups(self, **dict_arrs):
         output = []
-        indices = {leaf: 0 for leaf in self.leaves}
+        indices = {leaf: 0 for leaf in self.group_ids}
         for group in self.groups:
             record = dict_arr[group][indices[group]]
             output.append(record)

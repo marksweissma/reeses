@@ -1,4 +1,5 @@
-from joblib import Parallel
+from joblib import Parallel, delayed
+import threading
 
 from collections import defaultdict
 from typing import Any, Callable, Dict
@@ -23,32 +24,66 @@ from .utils import get_variant, _build_sample_weight, GroupAssignment
 from .fitting import fit_controller
 
 
-@variants.primary
-def ensemble_reducer(method, predictions):
-    return getattr(ensemble_reducer, method)(predictions)
-
-@ensemble_reducer.variant('predict')
-def ensemble_reducer(predictions):
-    return np.c_[predictions].mean(axis=1)
-
-@ensemble_reducer.variant('predict_proba')
-def ensemble_reducer(predictions):
-    n_jobs, _, _ = _partition_estimators(self.n_estimators, self.n_jobs)
-
-
-@ensemble_reducer.variant('predict_log_proba')
-def ensemble_reducer(predictions):
-    pass
-
-
 @attr.s(auto_attribs=True)
-class ReeseBase(BaseEstimator):
+class PiecewiseBase(BaseEstimator):
     assignment_estimator: BaseEstimator
     prediction_estimator: BaseEstimator
-    variant: str = None
     n_jobs: int = 1
+    random_state: Any = None
+    verbose=False
+
+    def _make_estimator(self, append=True, random_state=None):
+        """Make and configure a copy of the `base_estimator_` attribute.
+
+        Warning: This method should be used to properly instantiate new
+        sub-estimators.
+        """
+        estimator = clone(self.prediction_estimator)
+
+        if random_state is not None:
+            _set_random_states(estimator, random_state)
+
+        if append:
+            self.estimators_.append(estimator)
+
+        return estimator
+
+    def _fit_assignment(self, X, y=y, **assignment_kwargs):
+        self.assignment_estimator.fit(X, y=y, **assignment_kwargs)
+
+    def _fit_prediction(self, X, y=y, **prediction_kwargs):
+
+        models = {}
+        for assigner in self.assigners:
+            assignments = GroupAssignment.from_model(assigner, X)
+
+            template = {(assigner, assignment): clone(blank) for assignment in assignments.group_ids}
+
+
+            fitted = Parallel(n_jobs=self.n_jobs, verbose=self.verbose,
+                             **_joblib_parallel_args(prefer='threads'))(
+                delayed(_parallel_fit_tree_leaves)(
+                    assigner, self, X, y, sample_weight,
+                    verbose=self.verbose, class_weight=template.class_weight,
+                    n_samples_bootstrap=n_samples_bootstrap)
+                for assigner in self.assigners)
+
+            models[assigner] = fitted 
+
+        [_parallel_fit_tree_leaves(assigner, self, X, y, sample_weight, n_samples_bootstrap)
+                  for assigner in self.assigners]
+
+        self.estimators_ = models
 
     def fit(self, X, y=None, assignment_kwargs=None, prediction_kwargs=None, sample_weight=None, **kwargs):
+
+        X, y = self._validate_data(X, y, multi_output=True,
+                                   accept_sparse="csc", dtype=sk_forest.DTYPE)
+        if sample_weight is not None:
+            sample_weight = _check_sample_weight(sample_weight, X)
+
+        self.n_features_ = X.shape[1]
+        self.n_outputs_ = y.shape[1] if y.ndim > 1 else 1 if y.shape[0] else raise ValueError("y doesn't have shape")
 
         max_samples = getattr(self.assignment_estimator, 'max_samples', 1.0)
 
@@ -58,28 +93,32 @@ class ReeseBase(BaseEstimator):
         )
 
         assignment_kwargs = assignment_kwargs if assignment_kwargs else {}
+        self._fit_assignment(X, y=y, **assignment_kwargs)
+
         prediction_kwargs = prediction_kwargs if prediction_kwargs else {}
-
-        self.assignment_estimator.fit(X, y=y, **assignment_kwargs)
-
-        payload = {'sample_weight': sample_weight,
-                   'n_samples_bootstrap': n_samples_bootstrap,
-                   'n_jobs': self.n_jobs
-                   }
-        payload.update(prediction_kwargs)
-
-        fit_controller(self, X, y=y, variant=self.variant, **prediction_kwargs)
 
         return self
 
+
+    @property
+    def n_estimators(self):
+        count = len(getattr(self, 'estimators_', []))
+        return count
+
     @property
     def assigners(self):
+        # need to check is fitted
         if hasattr(self.assignment_estimator, 'estimators_'):
-            assigners = [i for i in self.assignment_estimator.estimators_]
+            assigners = list(self.assignment_estimator.estimators_)
         else:
             assigners = [self.assignment_estimator]
 
         return assigners
+
+    @property
+    def n_estimators(self):
+        n_estimators = sum([len(_models) for _models  in self.prediction_models_])
+        return n_estimators
 
 
 # hack because np.c_[list(elements)] gives the transpose of the desired output
@@ -87,7 +126,7 @@ def _array_cat(*arrs):
     return np.c_[arrs]
 
 
-class ReeseRegressor(RegressorMixin, ReeseBase):
+class PiecewiseRegressor(RegressorMixin, PieceBase):
     def predict(self, X):
         predictions = [self._predict(X, assigner) for assigner in self.assigners]
         return _array_cat(*predicions).mean(axis=1)
@@ -106,9 +145,80 @@ class ReeseRegressor(RegressorMixin, ReeseBase):
         return predictions
 
 
-# class ReeseClassifier(ClassifierMixin, ReeseBase):
-    # def predict_proba(self, X):
-        # return predictions_controller(self, X, method='predict_proba')
+class PiecewiseClassifier(ClassifierMixin, PieceBase):
+    def predict(self, X):
+        proba = self.predict_proba(X)
 
-    # def predict_log_proba(self, X):
-        # return predictions_controller(self, X, method='predict_proba')
+        if self.n_outputs_ == 1:
+            return self.classes_.take(np.argmax(proba, axis=1), axis=0)
+
+        else:
+            n_samples = proba[0].shape[0]
+            # all dtypes should be the same, so just take the first
+            class_type = self.classes_[0].dtype
+            predictions = np.empty((n_samples, self.n_outputs_),
+                                   dtype=class_type)
+
+            for k in range(self.n_outputs_):
+                predictions[:, k] = self.classes_[k].take(np.argmax(proba[k],
+                                                                    axis=1),
+                                                          axis=0)
+
+            return predictions
+
+    def predict_proba(self, X):
+        sk_forest.check_is_fitted(self)
+        # Check data
+        # Assign chunk of trees to jobs
+        n_jobs, _, _ = _partition_estimators(self.n_estimators, self.n_jobs)
+
+        # avoid storing the output of every estimator by summing them here
+        all_proba = [np.zeros((X.shape[0], j), dtype=np.float64)
+                     for j in np.atleast_1d(self.n_classes_)]
+        lock = threading.Lock()
+        Parallel(n_jobs=n_jobs, verbose=self.verbose,
+                 **_joblib_parallel_args(require="sharedmem"))(
+            delayed(_accumulate_prediction)(e.predict_proba, X, all_proba,
+                                            lock)
+            for e in self.estimators_)
+
+        for proba in all_proba:
+            proba /= len(self.estimators_)
+
+        if len(all_proba) == 1:
+            return all_proba[0]
+        else:
+            return all_proba
+
+    def predict_log_proba(self, X):
+        """
+        Predict class log-probabilities for X.
+
+        The predicted class log-probabilities of an input sample is computed as
+        the log of the mean predicted class probabilities of the trees in the
+        forest.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
+            The input samples. Internally, its dtype will be converted to
+            ``dtype=np.float32``. If a sparse matrix is provided, it will be
+            converted into a sparse ``csr_matrix``.
+
+        Returns
+        -------
+        p : ndarray of shape (n_samples, n_classes), or a list of n_outputs
+            such arrays if n_outputs > 1.
+            The class probabilities of the input samples. The order of the
+            classes corresponds to that in the attribute :term:`classes_`.
+        """
+        proba = self.predict_proba(X)
+
+        if self.n_outputs_ == 1:
+            return np.log(proba)
+
+        else:
+            for k in range(self.n_outputs_):
+                proba[k] = np.log(proba[k])
+
+            return proba
