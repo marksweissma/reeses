@@ -3,7 +3,7 @@ import inspect
 from functools import lru_cache
 
 from collections import defaultdict
-from typing import Any, List
+from typing import Any, List, Dict
 from warnings import catch_warnings, simplefilter, warn
 
 import numpy as np
@@ -14,11 +14,16 @@ from sklearn.utils import check_random_state, check_array, compute_sample_weight
 
 from sklearn.ensemble import _forest as sk_forest
 
+def _sanitize_dimensionality(arr):
+    if arr.ndim > 1 and all(i == 1 for i in arr.shape[1:]):
+        arr = np.ravel(arr)
+    return arr
+
 
 def _collect_leaf_indices(tree):
     children_left = tree.children_left
     children_right = tree.children_right
-    node_depth = [None] * tree.node_count
+    node_depth = [0] * tree.node_count
 
     leaves = []
 
@@ -64,37 +69,62 @@ def _build_sample_weight(tree, reese, X, y, sample_weight, class_weight=None, n_
     return _sample_weight
 
 
+def get_shape(dict_arr):
+     shapes = set([value.shape for value in dict_arr.values() if (value is not None and len(value))])
+     assert len(shapes) > 1
+     return shapes.pop() if len(shapes) else (0,)
+
+
+def package_arrays(arrs, shape):
+     arr = np.vstack(arrs).reshape((len(arrs), shape[1:]))
+     return arr
+
+
 @attr.s(auto_attribs=True, frozen=True)
 class GroupAssignment:
-    data: Any
+    data: Dict
     groups: List
+    group_ids: List
+
+    def get_shapes(self, keys=None):
+        keys = keys if keys else list(self.data)
+        output = {key: get_shape(self.data[key]) for key in keys}
+        return output
 
     @classmethod
     def from_groups(cls, groups, **kwargs):
-        data = {key: defaultdict(list) for key in kwargs}
+        data = {key: defaultdict(list) for key in kwargs if kwargs[key] is not None}
         groups = list(groups)
         group_ids = sorted(set(groups))
-        {key: [_data[group].append(row) for group, row in zip(groups, value)] for (key, value), _data in zip(kwargs.items(), data)}
+        for key, array in filter(lambda x: x[1] is not None, kwargs.items()):
+            _data = data[key]
+            [_data[group].append(row) for group, row in zip(groups, array)]
 
         return cls(data, groups, group_ids)
 
     @classmethod
     def from_model(cls, model, X, **kwargs):
         groups = model.apply(X)
-        return cls.from_groups(groups, X=X, *kwargs)
+        return cls.from_groups(groups, X=X, **kwargs)
 
-    def reconstruct_from_groups(self, **dict_arrs):
+    def reconstruct_from_groups(self, dict_arr, shape):
         output = []
         indices = {leaf: 0 for leaf in self.group_ids}
+
         for group in self.groups:
             record = dict_arr[group][indices[group]]
             output.append(record)
             indices[group] += 1
-        return np.vstack(output)
+
+        return package_arrays(output, shape)
 
     def __getitem__(self, key):
         return self.data[key]
 
+    def package_group(self, group):
+        shapes = self.get_shapes()
+        package = {key: package_arrays(_data[group], shapes[key]) for key, _data in self.data.items()}
+        return package
 
 class Pipeline(Pipeline):
     @if_delegate_has_method(delegate='_final_estimator')

@@ -12,7 +12,6 @@ import threading
 import variants
 
 from sklearn.base import BaseEstimator, clone, RegressorMixin, ClassifierMixin
-from sklearn.ensemble._base import BaseEnsemble
 
 from sklearn.utils import check_random_state, check_array, compute_sample_weight
 from sklearn.utils.fixes import delayed, _joblib_parallel_args
@@ -20,8 +19,24 @@ from sklearn.utils.validation import check_is_fitted, _check_sample_weight
 
 from sklearn.ensemble import _forest as sk_forest
 
-from .utils import get_variant, _build_sample_weight, GroupAssignment
-from .fitting import fit_controller
+from .utils import _build_sample_weight, GroupAssignment, get_shape
+
+
+def _accumulate_prediction(predict, X, out, lock, **kwargs):
+    prediction = predict(X, check_input=False, **kwargs)
+    with lock:
+        if len(out) == 1:
+            out[0] += prediction
+        else:
+            for i, _ in enumerate(out):
+                out[i] += prediction[i]
+
+
+def _parallel_fit_prediction_model(blank, X, y, prediction_kwargs, sample_weight=None, **kwargs):
+    kwargs.update(prediction_kwargs)
+    blank.fit(X, y, sample_weight=sample_weight, **kwargs)
+    return blank
+
 
 
 @attr.s(auto_attribs=True)
@@ -32,46 +47,46 @@ class PiecewiseBase(BaseEstimator):
     random_state: Any = None
     verbose=False
 
-    def _make_estimator(self, append=True, random_state=None):
-        """Make and configure a copy of the `base_estimator_` attribute.
-
-        Warning: This method should be used to properly instantiate new
-        sub-estimators.
-        """
+    def _make_estimator(self, random_state=None):
         estimator = clone(self.prediction_estimator)
 
         if random_state is not None:
             _set_random_states(estimator, random_state)
 
-        if append:
-            self.estimators_.append(estimator)
 
         return estimator
 
-    def _fit_assignment(self, X, y=y, **assignment_kwargs):
+    def _fit_assignment(self, X, y=None, **assignment_kwargs):
         self.assignment_estimator.fit(X, y=y, **assignment_kwargs)
 
-    def _fit_prediction(self, X, y=y, **prediction_kwargs):
+    def _fit_prediction(self, X, y=None, sample_weight=None, n_samples_bootstrap=None, **prediction_kwargs):
+
+        class_weight = getattr(self.assignment_estimator, 'class_weight', None)
 
         models = {}
         for assigner in self.assigners:
-            assignments = GroupAssignment.from_model(assigner, X)
+            _sample_weight = _build_sample_weight(assigner, self,
+                                                  X, y,
+                                                  sample_weight=sample_weight,
+                                                  class_weight=class_weight,
+                                                  n_samples_bootstrap=n_samples_bootstrap
+                                                  )
+            assignments = GroupAssignment.from_model(assigner, X=X, y=y, sample_weight=_sample_weight)
 
-            template = {(assigner, assignment): clone(blank) for assignment in assignments.group_ids}
-
+            template = {assignment: self._make_estimator() for assignment in assignments.group_ids}
 
             fitted = Parallel(n_jobs=self.n_jobs, verbose=self.verbose,
                              **_joblib_parallel_args(prefer='threads'))(
-                delayed(_parallel_fit_tree_leaves)(
-                    assigner, self, X, y, sample_weight,
-                    verbose=self.verbose, class_weight=template.class_weight,
-                    n_samples_bootstrap=n_samples_bootstrap)
-                for assigner in self.assigners)
+                delayed(_parallel_fit_prediction_model)(
+                    blank=template[assignment],
+                    # verbose=self.verbose,
+                    prediction_kwargs=prediction_kwargs,
+                    **assignments.package_group(assignment)
+                )
+                for assignment in assignments.group_ids)
 
-            models[assigner] = fitted 
+            models[assigner] = {group_id: _fitted for group_id, _fitted in zip(assignments.group_ids, fitted)}
 
-        [_parallel_fit_tree_leaves(assigner, self, X, y, sample_weight, n_samples_bootstrap)
-                  for assigner in self.assigners]
 
         self.estimators_ = models
 
@@ -83,9 +98,15 @@ class PiecewiseBase(BaseEstimator):
             sample_weight = _check_sample_weight(sample_weight, X)
 
         self.n_features_ = X.shape[1]
-        self.n_outputs_ = y.shape[1] if y.ndim > 1 else 1 if y.shape[0] else raise ValueError("y doesn't have shape")
 
-        max_samples = getattr(self.assignment_estimator, 'max_samples', 1.0)
+        if y.ndim > 1:
+            self.n_outputs_ = y.shape[1]
+        elif y.shape[0]:
+            self.n_outputs_ = 1
+        else:
+            raise ValueError("y doesn't have shape")
+
+        max_samples = getattr(self.assignment_estimator, 'max_samples', None)
 
         n_samples_bootstrap = sk_forest._get_n_samples_bootstrap(
             n_samples=X.shape[0],
@@ -96,6 +117,7 @@ class PiecewiseBase(BaseEstimator):
         self._fit_assignment(X, y=y, **assignment_kwargs)
 
         prediction_kwargs = prediction_kwargs if prediction_kwargs else {}
+        self._fit_prediction(X, y=y, n_samples_bootstrap=n_samples_bootstrap, sample_weight=sample_weight, **prediction_kwargs)
 
         return self
 
@@ -117,40 +139,35 @@ class PiecewiseBase(BaseEstimator):
 
     @property
     def n_estimators(self):
-        n_estimators = sum([len(_models) for _models  in self.prediction_models_])
+        n_estimators = sum([len(_models) for _models  in self.estimators_])
         return n_estimators
 
 
-# hack because np.c_[list(elements)] gives the transpose of the desired output
-def _array_cat(*arrs):
-    return np.c_[arrs]
 
-
-class PiecewiseRegressor(RegressorMixin, PieceBase):
+class PiecewiseRegressor(RegressorMixin, PiecewiseBase):
     def predict(self, X):
         predictions = [self._predict(X, assigner) for assigner in self.assigners]
-        return _array_cat(*predicions).mean(axis=1)
+        return np.c_[tuple(predictions)].mean(axis=1)
 
 
     def _predict(self, X, assignment_estimator):
-        leaf_assignments = GroupAssignment.from_model(assignment_estimator, X)
+        assignments = GroupAssignment.from_model(assignment_estimator, X=X)
 
         group_predictions = {}
-        for group in leaf_assignments.leaves:
-            model = self.prediction_models_[group]
-            data = leaf_assignments[group]
-            group_predictions[group] = model.predict(data)
+        for group in assignments.group_ids:
+            model = self.estimators_[assignment_estimator][group]
+            group_predictions[group] = model.predict(**assignments.package_group(group))
 
-        predictions = leaf_assignments.reconstruct_from_groups(group_predictions)
+        predictions = assignments.reconstruct_from_groups(group_predictions)
         return predictions
 
 
-class PiecewiseClassifier(ClassifierMixin, PieceBase):
+class PiecewiseClassifier(ClassifierMixin, PiecewiseBase):
     def predict(self, X):
         proba = self.predict_proba(X)
 
         if self.n_outputs_ == 1:
-            return self.classes_.take(np.argmax(proba, axis=1), axis=0)
+            predictions = self.classes_.take(np.argmax(proba, axis=1), axis=0)
 
         else:
             n_samples = proba[0].shape[0]
@@ -164,7 +181,7 @@ class PiecewiseClassifier(ClassifierMixin, PieceBase):
                                                                     axis=1),
                                                           axis=0)
 
-            return predictions
+        return predictions
 
     def predict_proba(self, X):
         sk_forest.check_is_fitted(self)
@@ -178,7 +195,7 @@ class PiecewiseClassifier(ClassifierMixin, PieceBase):
         lock = threading.Lock()
         Parallel(n_jobs=n_jobs, verbose=self.verbose,
                  **_joblib_parallel_args(require="sharedmem"))(
-            delayed(_accumulate_prediction)(e.predict_proba, X, all_proba,
+            delayed(accumulate_prediction)(e.predict_proba, X, all_proba,
                                             lock)
             for e in self.estimators_)
 
@@ -186,32 +203,11 @@ class PiecewiseClassifier(ClassifierMixin, PieceBase):
             proba /= len(self.estimators_)
 
         if len(all_proba) == 1:
-            return all_proba[0]
-        else:
-            return all_proba
+            all_proba = all_proba[0]
+
+        return all_proba
 
     def predict_log_proba(self, X):
-        """
-        Predict class log-probabilities for X.
-
-        The predicted class log-probabilities of an input sample is computed as
-        the log of the mean predicted class probabilities of the trees in the
-        forest.
-
-        Parameters
-        ----------
-        X : {array-like, sparse matrix} of shape (n_samples, n_features)
-            The input samples. Internally, its dtype will be converted to
-            ``dtype=np.float32``. If a sparse matrix is provided, it will be
-            converted into a sparse ``csr_matrix``.
-
-        Returns
-        -------
-        p : ndarray of shape (n_samples, n_classes), or a list of n_outputs
-            such arrays if n_outputs > 1.
-            The class probabilities of the input samples. The order of the
-            classes corresponds to that in the attribute :term:`classes_`.
-        """
         proba = self.predict_proba(X)
 
         if self.n_outputs_ == 1:
