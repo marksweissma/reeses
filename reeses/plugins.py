@@ -47,13 +47,8 @@ class PiecewiseBase(BaseEstimator):
     random_state: Any = None
     verbose=False
 
-    def _make_estimator(self, random_state=None):
+    def _make_estimator(self):
         estimator = clone(self.prediction_estimator)
-
-        if random_state is not None:
-            _set_random_states(estimator, random_state)
-
-
         return estimator
 
     def _fit_assignment(self, X, y=None, **assignment_kwargs):
@@ -71,7 +66,9 @@ class PiecewiseBase(BaseEstimator):
                                                   class_weight=class_weight,
                                                   n_samples_bootstrap=n_samples_bootstrap
                                                   )
+
             assignments = GroupAssignment.from_model(assigner, X=X, y=y, sample_weight=_sample_weight)
+            self.shapes = assignments.shapes
 
             template = {assignment: self._make_estimator() for assignment in assignments.group_ids}
 
@@ -158,7 +155,7 @@ class PiecewiseRegressor(RegressorMixin, PiecewiseBase):
             model = self.estimators_[assignment_estimator][group]
             group_predictions[group] = model.predict(**assignments.package_group(group))
 
-        predictions = assignments.reconstruct_from_groups(group_predictions)
+        predictions = assignments.reconstruct_from_groups(group_predictions, shape=self.shapes['y'])
         return predictions
 
 

@@ -69,14 +69,12 @@ def _build_sample_weight(tree, reese, X, y, sample_weight, class_weight=None, n_
     return _sample_weight
 
 
-def get_shape(dict_arr):
-     shapes = set([value.shape for value in dict_arr.values() if (value is not None and len(value))])
-     assert len(shapes) > 1
-     return shapes.pop() if len(shapes) else (0,)
+def get_shapes(dict_arr):
+    return {key: value.shape for key, value in dict_arr.items() if (value is not None and len(value))}
 
 
 def package_arrays(arrs, shape):
-     arr = np.vstack(arrs).reshape((len(arrs), shape[1:]))
+     arr = np.vstack(arrs).reshape((len(arrs), *shape[1:]))
      return arr
 
 
@@ -85,14 +83,11 @@ class GroupAssignment:
     data: Dict
     groups: List
     group_ids: List
-
-    def get_shapes(self, keys=None):
-        keys = keys if keys else list(self.data)
-        output = {key: get_shape(self.data[key]) for key in keys}
-        return output
+    shapes: Dict
 
     @classmethod
     def from_groups(cls, groups, **kwargs):
+        shapes = get_shapes(kwargs)
         data = {key: defaultdict(list) for key in kwargs if kwargs[key] is not None}
         groups = list(groups)
         group_ids = sorted(set(groups))
@@ -100,7 +95,7 @@ class GroupAssignment:
             _data = data[key]
             [_data[group].append(row) for group, row in zip(groups, array)]
 
-        return cls(data, groups, group_ids)
+        return cls(data, groups, group_ids, shapes)
 
     @classmethod
     def from_model(cls, model, X, **kwargs):
@@ -122,8 +117,7 @@ class GroupAssignment:
         return self.data[key]
 
     def package_group(self, group):
-        shapes = self.get_shapes()
-        package = {key: package_arrays(_data[group], shapes[key]) for key, _data in self.data.items()}
+        package = {key: package_arrays(_data[group], self.shapes[key]) for key, _data in self.data.items()}
         return package
 
 class Pipeline(Pipeline):
