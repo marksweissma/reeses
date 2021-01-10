@@ -128,4 +128,4 @@ class Pipeline(Pipeline):
         Xt = X
         for _, name, transform in self._iter(with_final=False):
             Xt = transform.transform(Xt)
-        return self.steps[-1][-1].apply(Xt, **predict_params)
+        return self.steps[-1][-1].apply(Xt)
