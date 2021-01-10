@@ -14,10 +14,10 @@ from sklearn.utils import check_random_state, check_array, compute_sample_weight
 
 from sklearn.ensemble import _forest as sk_forest
 
-def _sanitize_dimensionality(arr):
-    if arr.ndim > 1 and all(i == 1 for i in arr.shape[1:]):
-        arr = np.ravel(arr)
-    return arr
+
+###############################################################
+### Several of the helpers are lightly edited sklearn utils ###
+###############################################################
 
 
 def _collect_leaf_indices(tree):
@@ -41,6 +41,7 @@ def _collect_leaf_indices(tree):
             stack.append((children_right[node_id], _depth))
 
     return leaves
+
 
 def _build_sample_weight(tree, reese, X, y, sample_weight, class_weight=None, n_samples_bootstrap=None):
     if getattr(reese.assignment_estimator, 'bootstrap', None):
@@ -120,6 +121,7 @@ class GroupAssignment:
         package = {key: package_arrays(_data[group], self.shapes[key]) for key, _data in self.data.items()}
         return package
 
+
 class Pipeline(Pipeline):
     @if_delegate_has_method(delegate='_final_estimator')
     def apply(self, X):
@@ -127,22 +129,3 @@ class Pipeline(Pipeline):
         for _, name, transform in self._iter(with_final=False):
             Xt = transform.transform(Xt)
         return self.steps[-1][-1].apply(Xt, **predict_params)
-
-
-SIGNATURE_CACHE = {}
-
-
-def build_key(func=None, instance=None):
-    names = [func.name] if func else []
-    if instance:
-        current = instance.__class_.__name__ if instance else None
-        names.append(current)
-    key = ''.join(names)
-    return key
-
-def get_signature(func=None, instance=None):
-    key = build_key(wrapped, instance)
-    if key not in SIGNATURE_CACHE:
-        signature = inspect.signature(func)
-        SIGNATURE_CACHE[key] = signature
-    return SIGNATURE_CACHE[key]
