@@ -51,7 +51,8 @@ def _build_sample_weight(tree, reese, X, y, sample_weight, class_weight=None, n_
         else:
             curr_sample_weight = sample_weight.copy()
 
-        indices = sk_forest._generate_sample_indices(tree.random_state, n_samples, n_samples_bootstrap)
+        indices = sk_forest._generate_sample_indices(
+            tree.random_state, n_samples, n_samples_bootstrap)
 
         sample_counts = np.bincount(indices, minlength=n_samples)
         curr_sample_weight *= sample_counts
@@ -75,8 +76,8 @@ def get_shapes(dict_arr):
 
 
 def package_arrays(arrs, shape):
-     arr = np.vstack(arrs).reshape((len(arrs), *shape[1:]))
-     return arr
+    arr = np.vstack(arrs).reshape((len(arrs), *shape[1:]))
+    return arr
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -118,7 +119,8 @@ class GroupAssignment:
         return self.data[key]
 
     def package_group(self, group):
-        package = {key: package_arrays(_data[group], self.shapes[key]) for key, _data in self.data.items()}
+        package = {key: package_arrays(_data[group], self.shapes[key])
+                   for key, _data in self.data.items()}
         return package
 
 

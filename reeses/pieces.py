@@ -1,19 +1,13 @@
-from joblib import Parallel, delayed
+from joblib import Parallel
 import threading
 
-from collections import defaultdict
-from typing import Any, Callable, Dict
-from queue import Queue
-from warnings import catch_warnings, simplefilter, warn
+from typing import Any
 
 import attr
 import numpy as np
-import threading
-import variants
 
 from sklearn.base import BaseEstimator, clone, RegressorMixin, ClassifierMixin
 
-from sklearn.utils import check_random_state, check_array, compute_sample_weight
 from sklearn.utils.fixes import delayed, _joblib_parallel_args
 from sklearn.utils.validation import check_is_fitted, _check_sample_weight
 
@@ -22,14 +16,14 @@ from sklearn.ensemble import _forest as sk_forest
 from .utils import _build_sample_weight, GroupAssignment, get_shape
 
 
-def _accumulate_prediction(predict, X, out, lock, **kwargs):
-    prediction = predict(X, check_input=False, **kwargs)
+def _accumulate_prediction(predict, X, out, lock, estimator, class_map, **kwargs):
+    prediction = predict(X, **kwargs)
     with lock:
         if len(out) == 1:
             out[0] += prediction
         else:
             for i, _ in enumerate(out):
-                out[i] += prediction[i]
+                out[class_map[estimator.classes_[i]] - min_class] += prediction[i]
 
 
 def _parallel_fit_prediction_model(blank, X, y, prediction_kwargs, sample_weight=None, **kwargs):
@@ -38,14 +32,13 @@ def _parallel_fit_prediction_model(blank, X, y, prediction_kwargs, sample_weight
     return blank
 
 
-
 @attr.s(auto_attribs=True)
 class PiecewiseBase(BaseEstimator):
     assignment_estimator: BaseEstimator
     prediction_estimator: BaseEstimator
     n_jobs: int = 1
     random_state: Any = None
-    verbose=False
+    verbose = False
 
     def _make_estimator(self):
         estimator = clone(self.prediction_estimator)
@@ -67,13 +60,14 @@ class PiecewiseBase(BaseEstimator):
                                                   n_samples_bootstrap=n_samples_bootstrap
                                                   )
 
-            assignments = GroupAssignment.from_model(assigner, X=X, y=y, sample_weight=_sample_weight)
+            assignments = GroupAssignment.from_model(
+                assigner, X=X, y=y, sample_weight=_sample_weight)
             self.shapes = assignments.shapes
 
             template = {assignment: self._make_estimator() for assignment in assignments.group_ids}
 
             fitted = Parallel(n_jobs=self.n_jobs, verbose=self.verbose,
-                             **_joblib_parallel_args(prefer='threads'))(
+                              **_joblib_parallel_args(prefer='threads'))(
                 delayed(_parallel_fit_prediction_model)(
                     blank=template[assignment],
                     # verbose=self.verbose,
@@ -82,8 +76,8 @@ class PiecewiseBase(BaseEstimator):
                 )
                 for assignment in assignments.group_ids)
 
-            models[assigner] = {group_id: _fitted for group_id, _fitted in zip(assignments.group_ids, fitted)}
-
+            models[assigner] = {group_id: _fitted for group_id,
+                                _fitted in zip(assignments.group_ids, fitted)}
 
         self.estimators_ = models
 
@@ -114,15 +108,10 @@ class PiecewiseBase(BaseEstimator):
         self._fit_assignment(X, y=y, **assignment_kwargs)
 
         prediction_kwargs = prediction_kwargs if prediction_kwargs else {}
-        self._fit_prediction(X, y=y, n_samples_bootstrap=n_samples_bootstrap, sample_weight=sample_weight, **prediction_kwargs)
+        self._fit_prediction(X, y=y, n_samples_bootstrap=n_samples_bootstrap,
+                             sample_weight=sample_weight, **prediction_kwargs)
 
         return self
-
-
-    @property
-    def n_estimators(self):
-        count = len(getattr(self, 'estimators_', []))
-        return count
 
     @property
     def assigners(self):
@@ -136,16 +125,14 @@ class PiecewiseBase(BaseEstimator):
 
     @property
     def n_estimators(self):
-        n_estimators = sum([len(_models) for _models  in self.estimators_])
+        n_estimators = sum([len(assigner_models) for assigner_models in self.estimators_.values()])
         return n_estimators
-
 
 
 class PiecewiseRegressor(RegressorMixin, PiecewiseBase):
     def predict(self, X):
         predictions = [self._predict(X, assigner) for assigner in self.assigners]
         return np.c_[tuple(predictions)].mean(axis=1)
-
 
     def _predict(self, X, assignment_estimator):
         assignments = GroupAssignment.from_model(assignment_estimator, X=X)
@@ -187,31 +174,26 @@ class PiecewiseClassifier(ClassifierMixin, PiecewiseBase):
         n_jobs, _, _ = _partition_estimators(self.n_estimators, self.n_jobs)
 
         # avoid storing the output of every estimator by summing them here
-        all_proba = [np.zeros((X.shape[0], j), dtype=np.float64)
+        all_probabilities = [np.zeros((X.shape[0], j), dtype=np.float64)
                      for j in np.atleast_1d(self.n_classes_)]
+        class_map = {_class: idx for idx, _class in enumerate(self.assignment_estimator.classes_)}
+
         lock = threading.Lock()
         Parallel(n_jobs=n_jobs, verbose=self.verbose,
                  **_joblib_parallel_args(require="sharedmem"))(
-            delayed(accumulate_prediction)(e.predict_proba, X, all_proba,
-                                            lock)
+            delayed(accumulate_prediction)(e.predict_probabilities, X, all_probabilities,
+                                           lock, e, class_map)
             for e in self.estimators_)
 
-        for proba in all_proba:
-            proba /= len(self.estimators_)
+        for probability in all_probabilities:
+            probability /= len(self.estimators_)
 
-        if len(all_proba) == 1:
-            all_proba = all_proba[0]
+        if len(all_probabilities) == 1:
+            all_probabilities = all_probabilities[0]
 
-        return all_proba
+        return all_probabilities
 
     def predict_log_proba(self, X):
-        proba = self.predict_proba(X)
+        probabilities = self.predict_proba(X)
 
-        if self.n_outputs_ == 1:
-            return np.log(proba)
-
-        else:
-            for k in range(self.n_outputs_):
-                proba[k] = np.log(proba[k])
-
-            return proba
+        return np.log(probabilities)
