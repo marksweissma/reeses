@@ -13,7 +13,7 @@ from sklearn.utils.validation import check_is_fitted, _check_sample_weight
 
 from sklearn.ensemble import _forest as sk_forest
 
-from .utils import _build_sample_weight, GroupAssignment, get_shape, MeanEstimator
+from .utils import _build_sample_weight, GroupAssignment, MeanEstimator
 
 
 def _accumulate_prediction(predict, X, out, lock, estimator, class_map, **kwargs):
@@ -37,6 +37,13 @@ def _parallel_fit_prediction_model(prediction_blank, fallback_blank, X, y, predi
 
 @attr.s(auto_attribs=True)
 class PiecewiseBase(BaseEstimator):
+    """
+    Backbone for linking assignment estimator to prediction estimators
+
+    Assignment estimator specify which group an observation belongs.
+    Each group has a :py:func:`sklearn.base.clone`
+
+    """
     assignment_estimator: BaseEstimator
     prediction_estimator: BaseEstimator
     fallback_estimator: BaseEstimator = attr.Factory(MeanEstimator)

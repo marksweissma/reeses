@@ -73,16 +73,39 @@ def _build_sample_weight(tree, reese, X, y, sample_weight, class_weight=None, n_
 
 
 def get_shapes(dict_arr):
+    """
+    get `shape` attribute of values of dict if they are None and have length
+
+    Args:
+        dict_arr (dict): dict of arrays
+
+    Returns:
+        dict: keys of `dict_array` with lengths
+
+    """
     return {key: value.shape for key, value in dict_arr.items() if (value is not None and len(value))}
 
 
 def package_arrays(arrs, shape):
+    """
+    get `shape` attribute of values of dict if they are None and have length
+
+    Args:
+        shape (dict): shape of 
+
+    Returns:
+        dict: keys of `dict_array` with lengths
+
+    """
     arr = np.vstack(arrs).reshape((len(arrs), *shape[1:]))
     return arr
 
 
 @attr.s(auto_attribs=True, frozen=True)
 class GroupAssignment:
+    """
+    Serves and reconstructs group data
+    """
     data: Dict
     groups: List
     group_ids: List
@@ -90,6 +113,9 @@ class GroupAssignment:
 
     @classmethod
     def from_groups(cls, groups, **kwargs):
+        """
+        Collects **kwargs** data into groups by key specified from  :py:class:`typing.Iterable` of groups
+        """
         shapes = get_shapes(kwargs)
         data = {key: defaultdict(list) for key in kwargs if kwargs[key] is not None}
         groups = list(groups)
@@ -102,10 +128,16 @@ class GroupAssignment:
 
     @classmethod
     def from_model(cls, model, method, X, **kwargs):
+        """
+        Builds groups from model by executing method on X, groups X and all **kwargs**
+        """
         groups = getattr(model, method)(X)
         return cls.from_groups(groups, X=X, **kwargs)
 
     def reconstruct_from_groups(self, dict_arr, shape):
+        """
+        Reconstruct and coerce to shape collection key by group
+        """
         output = []
         indices = {leaf: 0 for leaf in self.group_ids}
 
@@ -119,13 +151,20 @@ class GroupAssignment:
     def __getitem__(self, key):
         return self.data[key]
 
-    def package_group(self, group):
+    def package_group(self, group, keys=None):
+        """
+        Serve the stored for the group given keys (None / Falsey yields all)
+        """
+        keys = key if keys else set(self.data)
         package = {key: package_arrays(_data[group], self.shapes[key])
-                   for key, _data in self.data.items()}
+                   for key, _data in self.data.items() if key in keys}
         return package
 
 
 class Pipeline(Pipeline):
+    """
+    Pipeline wrapper for assignment estimators with apply method
+    """
     @if_delegate_has_method(delegate='_final_estimator')
     def apply(self, X):
         Xt = X
@@ -135,6 +174,11 @@ class Pipeline(Pipeline):
 
 
 class MeanEstimator(BaseEstimator):
+    """
+    Fits on average of y given sample weight (if applicable)
+    This is the default in :py:class:`reeses.pieces.PiecewiseBase`
+
+    """
     def fit(self, X, y=None, sample_weight=None, **fit_params):
         sample_weight = np.ones_like(y) if sample_weight is None else sample_weight
         count = sample_weight.sum()
@@ -143,7 +187,7 @@ class MeanEstimator(BaseEstimator):
         return self
 
     def predict(self, X):
-        output = np.ones((len(X),)) * self.mu_
+        output = np.ones((len(X), *self.mu_.shape[1:])) * self.mu_
         return output
 
 
