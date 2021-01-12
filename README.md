@@ -3,7 +3,7 @@
 reeses is a scikit-learn plugin for piecewise models with learned partitions.
 
 learned partitions or groups can be assigned through tree based or clustering models,
-the only requirements is the estimator can be fit on the data and exposes and `apply` method
+the only requirements is the estimator can be fit on the data and exposes a method
 that can assign the appropriate id of the learned partition for new data.
 
 reeses follows the utility patterns in scikit-learn such as 

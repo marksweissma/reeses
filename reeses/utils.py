@@ -8,6 +8,7 @@ from warnings import catch_warnings, simplefilter, warn
 
 import numpy as np
 
+from sklearn.base import BaseEstimator
 from sklearn.pipeline import Pipeline
 from sklearn.utils.metaestimators import if_delegate_has_method
 from sklearn.utils import check_random_state, check_array, compute_sample_weight
@@ -100,8 +101,8 @@ class GroupAssignment:
         return cls(data, groups, group_ids, shapes)
 
     @classmethod
-    def from_model(cls, model, X, **kwargs):
-        groups = model.apply(X)
+    def from_model(cls, model, method, X, **kwargs):
+        groups = getattr(model, method)(X)
         return cls.from_groups(groups, X=X, **kwargs)
 
     def reconstruct_from_groups(self, dict_arr, shape):
@@ -131,3 +132,18 @@ class Pipeline(Pipeline):
         for _, name, transform in self._iter(with_final=False):
             Xt = transform.transform(Xt)
         return self.steps[-1][-1].apply(Xt)
+
+
+class MeanEstimator(BaseEstimator):
+    def fit(self, X, y=None, sample_weight=None, **fit_params):
+        sample_weight = np.ones_like(y) if sample_weight is None else sample_weight
+        count = sample_weight.sum()
+
+        self.mu_ = (sample_weight * y).sum() / count
+        return self
+
+    def predict(self, X):
+        output = np.ones((len(X),)) * self.mu_
+        return output
+
+

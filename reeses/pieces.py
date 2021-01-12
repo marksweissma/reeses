@@ -41,6 +41,7 @@ class PiecewiseBase(BaseEstimator):
     assignment_estimator: BaseEstimator
     prediction_estimator: BaseEstimator
     fallback_estimator: BaseEstimator = attr.Factory(MeanEstimator)
+    assignment_method: str = 'apply'
     n_jobs: int = 1
     random_state: Any = None
     verbose = False
@@ -70,7 +71,7 @@ class PiecewiseBase(BaseEstimator):
                                                   )
 
             assignments = GroupAssignment.from_model(
-                assigner, X=X, y=y, sample_weight=_sample_weight)
+                assigner, method=self.assignment_method, X=X, y=y, sample_weight=_sample_weight)
 
             prediction_template = {assignment: self._make_prediction_estimator() for assignment in assignments.group_ids}
             fallback_template = {assignment: self._make_fallback_estimator() for assignment in assignments.group_ids}
@@ -154,7 +155,7 @@ class PiecewiseRegressor(RegressorMixin, PiecewiseBase):
         return np.c_[tuple(predictions)].mean(axis=1)
 
     def _predict(self, X, assigner):
-        assignments = GroupAssignment.from_model(assigner, X=X)
+        assignments = GroupAssignment.from_model(assigner, method=self.assignment_method, X=X)
 
         group_predictions = {}
         for group in assignments.group_ids:
@@ -164,8 +165,9 @@ class PiecewiseRegressor(RegressorMixin, PiecewiseBase):
         predictions = assignments.reconstruct_from_groups(group_predictions, shape=self.shapes['y'])
         return predictions
 
+
 def _predict_proba(piecewise, X, assigner):
-    assignments = GroupAssignment.from_model(assigner, X=X)
+    assignments = GroupAssignment.from_model(assigner, method=self.assignment_method, X=X)
 
     group_predictions = {}
     for group in assignments.group_ids:
