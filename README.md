@@ -15,7 +15,9 @@ reeses follows the utility patterns in scikit-learn such as
 
 ## quick start
 
-``` pip install reeses```
+``` bash
+pip install reeses
+```
 
 ### regression
 

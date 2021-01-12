@@ -13,8 +13,7 @@ from sklearn.utils.validation import check_is_fitted, _check_sample_weight
 
 from sklearn.ensemble import _forest as sk_forest
 
-from .utils import _build_sample_weight, GroupAssignment, get_shape
-from .mean import MeanEstimator
+from .utils import _build_sample_weight, GroupAssignment, get_shape, MeanEstimator
 
 
 def _accumulate_prediction(predict, X, out, lock, estimator, class_map, **kwargs):
