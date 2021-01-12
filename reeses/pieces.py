@@ -14,6 +14,7 @@ from sklearn.utils.validation import check_is_fitted, _check_sample_weight
 from sklearn.ensemble import _forest as sk_forest
 
 from .utils import _build_sample_weight, GroupAssignment, get_shape
+from .mean import MeanEstimator
 
 
 def _accumulate_prediction(predict, X, out, lock, estimator, class_map, **kwargs):
@@ -23,12 +24,15 @@ def _accumulate_prediction(predict, X, out, lock, estimator, class_map, **kwargs
             out[0] += prediction
         else:
             for i, _ in enumerate(out):
-                out[class_map[estimator.classes_[i]] - min_class] += prediction[i]
+                out[class_map[estimator.classes_[i]]] += prediction[i]
 
 
-def _parallel_fit_prediction_model(blank, X, y, prediction_kwargs, sample_weight=None, **kwargs):
+def _parallel_fit_prediction_model(prediction_blank, fallback_blank, X, y, prediction_kwargs, sample_weight=None, **kwargs):
     kwargs.update(prediction_kwargs)
-    blank.fit(X, y, sample_weight=sample_weight, **kwargs)
+    try:
+        blank = prediction_blank.fit(X, y, sample_weight=sample_weight, **kwargs)
+    except:
+        blank = fallback_blank.fit(X, y, sample_weight=sample_weight, **kwargs)
     return blank
 
 
@@ -36,12 +40,17 @@ def _parallel_fit_prediction_model(blank, X, y, prediction_kwargs, sample_weight
 class PiecewiseBase(BaseEstimator):
     assignment_estimator: BaseEstimator
     prediction_estimator: BaseEstimator
+    fallback_estimator: BaseEstimator = attr.Factory(MeanEstimator)
     n_jobs: int = 1
     random_state: Any = None
     verbose = False
 
-    def _make_estimator(self):
+    def _make_prediction_estimator(self):
         estimator = clone(self.prediction_estimator)
+        return estimator
+
+    def _make_fallback_estimator(self):
+        estimator = clone(self.fallback_estimator)
         return estimator
 
     def _fit_assignment(self, X, y=None, **assignment_kwargs):
@@ -62,14 +71,15 @@ class PiecewiseBase(BaseEstimator):
 
             assignments = GroupAssignment.from_model(
                 assigner, X=X, y=y, sample_weight=_sample_weight)
-            self.shapes = assignments.shapes
 
-            template = {assignment: self._make_estimator() for assignment in assignments.group_ids}
+            prediction_template = {assignment: self._make_prediction_estimator() for assignment in assignments.group_ids}
+            fallback_template = {assignment: self._make_fallback_estimator() for assignment in assignments.group_ids}
 
             fitted = Parallel(n_jobs=self.n_jobs, verbose=self.verbose,
                               **_joblib_parallel_args(prefer='threads'))(
                 delayed(_parallel_fit_prediction_model)(
-                    blank=template[assignment],
+                    prediction_blank=prediction_template[assignment],
+                    fallback_blank=fallback_template[assignment],
                     # verbose=self.verbose,
                     prediction_kwargs=prediction_kwargs,
                     **assignments.package_group(assignment)
@@ -79,6 +89,7 @@ class PiecewiseBase(BaseEstimator):
             models[assigner] = {group_id: _fitted for group_id,
                                 _fitted in zip(assignments.group_ids, fitted)}
 
+        self.shapes = assignments.shapes
         self.estimators_ = models
 
     def fit(self, X, y=None, assignment_kwargs=None, prediction_kwargs=None, sample_weight=None, **kwargs):
@@ -128,25 +139,48 @@ class PiecewiseBase(BaseEstimator):
         n_estimators = sum([len(assigner_models) for assigner_models in self.estimators_.values()])
         return n_estimators
 
+    @property
+    def classes_(self):
+        return getattr(self.assignment_estimator, 'classes_', None)
+
+    @property
+    def n_classes_(self):
+        return getattr(self.assignment_estimator, 'n_classes_', None)
+
 
 class PiecewiseRegressor(RegressorMixin, PiecewiseBase):
     def predict(self, X):
         predictions = [self._predict(X, assigner) for assigner in self.assigners]
         return np.c_[tuple(predictions)].mean(axis=1)
 
-    def _predict(self, X, assignment_estimator):
-        assignments = GroupAssignment.from_model(assignment_estimator, X=X)
+    def _predict(self, X, assigner):
+        assignments = GroupAssignment.from_model(assigner, X=X)
 
         group_predictions = {}
         for group in assignments.group_ids:
-            model = self.estimators_[assignment_estimator][group]
+            model = self.estimators_[assigner][group]
             group_predictions[group] = model.predict(**assignments.package_group(group))
 
         predictions = assignments.reconstruct_from_groups(group_predictions, shape=self.shapes['y'])
         return predictions
 
+def _predict_proba(piecewise, X, assigner):
+    assignments = GroupAssignment.from_model(assigner, X=X)
+
+    group_predictions = {}
+    for group in assignments.group_ids:
+        model = piecewise.estimators_[assigner][group]
+        group_predictions[group] = model.predict_proba(**assignments.package_group(group))
+
+    shape = list(piecewise.shapes['y'])
+    shape[1] = piecewise._n_classes_ if len(shape) > 1 else shape + [self.n_classes_]
+
+    predictions = assignments.reconstruct_from_groups(group_predictions, shape=shape)
+    return predictions
+
 
 class PiecewiseClassifier(ClassifierMixin, PiecewiseBase):
+
     def predict(self, X):
         proba = self.predict_proba(X)
 
@@ -171,17 +205,17 @@ class PiecewiseClassifier(ClassifierMixin, PiecewiseBase):
         sk_forest.check_is_fitted(self)
         # Check data
         # Assign chunk of trees to jobs
-        n_jobs, _, _ = _partition_estimators(self.n_estimators, self.n_jobs)
+        n_jobs, _, _ = sk_forest._partition_estimators(len(self.assigners), self.n_jobs)
 
         # avoid storing the output of every estimator by summing them here
         all_probabilities = [np.zeros((X.shape[0], j), dtype=np.float64)
                      for j in np.atleast_1d(self.n_classes_)]
-        class_map = {_class: idx for idx, _class in enumerate(self.assignment_estimator.classes_)}
+        class_map = {_class: idx for idx, _class in enumerate(self.classes_)}
 
         lock = threading.Lock()
         Parallel(n_jobs=n_jobs, verbose=self.verbose,
                  **_joblib_parallel_args(require="sharedmem"))(
-            delayed(accumulate_prediction)(e.predict_probabilities, X, all_probabilities,
+            delayed(_accumulate_prediction)(e.predict_proba, X, all_probabilities,
                                            lock, e, class_map)
             for e in self.estimators_)
 
@@ -195,5 +229,8 @@ class PiecewiseClassifier(ClassifierMixin, PiecewiseBase):
 
     def predict_log_proba(self, X):
         probabilities = self.predict_proba(X)
-
-        return np.log(probabilities)
+        if isinstance(probabilities, list):
+            probabilities = [np.log(_probabilities) for _probabilities in probabilities]
+        else:
+            probabilities = np.log(probabilities)
+        return probabilities
