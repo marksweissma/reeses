@@ -8,7 +8,7 @@ from warnings import catch_warnings, simplefilter, warn
 
 import numpy as np
 
-from sklearn.base import BaseEstimator
+from sklearn.base import BaseEstimator, RegressorMixin, ClassifierMixin
 from sklearn.pipeline import Pipeline
 from sklearn.utils.metaestimators import if_delegate_has_method
 from sklearn.utils import check_random_state, check_array, compute_sample_weight
@@ -179,7 +179,7 @@ class MeanEstimator(BaseEstimator):
     This is the default in :py:class:`reeses.pieces.PiecewiseBase`
 
     """
-    def fit(self, X, y=None, sample_weight=None, **fit_params):
+    def fit(self, X, y=None, sample_weight=None, strategy='ovr', **fit_params):
         sample_weight = np.ones_like(y) if sample_weight is None else sample_weight
         count = sample_weight.sum()
 
@@ -191,3 +191,32 @@ class MeanEstimator(BaseEstimator):
         return output
 
 
+class MeanRegressor(RegressorMixin, MeanEstimator):
+    pass
+
+
+class MeanClassifier(ClassifierMixin, MeanEstimator):
+    """
+    Fits on average of y given sample weight (if applicable)
+    This is the default in :py:class:`reeses.pieces.PiecewiseBase`
+
+    """
+    def fit(self, X, y=None, sample_weight=None, strategy='ovr', **fit_params):
+
+        self.classes_ = np.sort(np.unique(y))
+        self.n_classes_ = len(self.classes_)
+        sample_weight = np.ones_like(y) if sample_weight is None else sample_weight
+        count = sample_weight.sum()
+        groups = GroupAssignment.from_groups(y, weight=sample_weight)
+        weights = {group: sum(weight) / count for group, weight in groups['weight'].items()}
+
+        self.mu_ = np.array([weights[group] for group in self.classes_])
+        return self
+
+    def predict(self, X):
+        output = np.ones((len(X), *self.mu_.shape)) * self.mu_
+        return output
+
+    def predict_proba(self, X):
+        output = np.ones((len(X), *self.mu_.shape)) * self.mu_
+        return output

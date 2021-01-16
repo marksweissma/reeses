@@ -16,37 +16,37 @@ from sklearn.ensemble import _forest as sk_forest
 from .utils import _build_sample_weight, GroupAssignment, MeanEstimator
 
 
-def _accumulate_prediction(predict, X, out, lock, estimator, class_map, **kwargs):
-    prediction = predict(X, **kwargs)
-    with lock:
-        if len(out) == 1:
-            out[0] += prediction
-        else:
-            for i, _ in enumerate(out):
-                out[class_map[estimator.classes_[i]]] += prediction[i]
-
-
 def _parallel_fit_prediction_model(prediction_blank, fallback_blank, X, y, prediction_kwargs, sample_weight=None, **kwargs):
     kwargs.update(prediction_kwargs)
     try:
         blank = prediction_blank.fit(X, y, sample_weight=sample_weight, **kwargs)
-    except:
-        blank = fallback_blank.fit(X, y, sample_weight=sample_weight, **kwargs)
+    except Exception as e:
+        if fallback_blank:
+            blank = fallback_blank.fit(X, y, sample_weight=sample_weight, **kwargs)
+        else:
+            raise(e)
     return blank
 
+
+def _enforce_shape(arr, class_map, classes):
+    output = np.zeros((len(arr), len(class_map)))
+    for column, _class in enumerate(classes):
+        output[:, class_map[_class]] += arr[:, column]
+    return output
 
 @attr.s(auto_attribs=True)
 class PiecewiseBase(BaseEstimator):
     """
     Backbone for linking assignment estimator to prediction estimators
 
-    Assignment estimator specify which group an observation belongs.
-    Each group has a :py:func:`sklearn.base.clone`
+    Assignment estimator specifies which group an observation belongs.
+    Each group has an independent :py:func:`sklearn.base.clone` of the prediction_estimator fit to it
 
+    Bootstrapping supported through the random_state of each estimator ensemble via sample reweighting
     """
     assignment_estimator: BaseEstimator
     prediction_estimator: BaseEstimator
-    fallback_estimator: BaseEstimator = attr.Factory(MeanEstimator)
+    fallback_estimator: BaseEstimator = attr.Factory(u.MeanEstimator)
     assignment_method: str = 'apply'
     n_jobs: int = 1
     random_state: Any = None
@@ -142,6 +142,10 @@ class PiecewiseBase(BaseEstimator):
         return assigners
 
     @property
+    def n_assigners(self):
+        return len(self.assigners)
+
+    @property
     def n_estimators(self):
         n_estimators = sum([len(assigner_models) for assigner_models in self.estimators_.values()])
         return n_estimators
@@ -172,18 +176,29 @@ class PiecewiseRegressor(RegressorMixin, PiecewiseBase):
         return predictions
 
 
-def _predict_proba(piecewise, X, assigner):
-    assignments = GroupAssignment.from_model(assigner, method=self.assignment_method, X=X)
+def _predict_proba(piecewise, assigner, X, all_probabilities, lock, models, class_map):
+    assignments = GroupAssignment.from_model(assigner, method=piecewise.assignment_method, X=X)
 
     group_predictions = {}
     for group in assignments.group_ids:
-        model = piecewise.estimators_[assigner][group]
-        group_predictions[group] = model.predict_proba(**assignments.package_group(group))
+        model = models[group]
+        _predictions = model.predict_proba(**assignments.package_group(group))
+        group_predictions[group] = _enforce_shape(_predictions, class_map, model.classes_)
 
     shape = list(piecewise.shapes['y'])
-    shape[1] = piecewise._n_classes_ if len(shape) > 1 else shape + [self.n_classes_]
+    if len(shape) < 2:
+        shape += [piecewise.n_classes_]
+    else:
+        shape[1] = piecewise.n_classes_
 
     predictions = assignments.reconstruct_from_groups(group_predictions, shape=shape)
+    with lock:
+        if len(all_probabilities) == 1:
+            all_probabilities[0] += predictions
+        else:
+            for i in range(len(all_probabilities)):
+                all_probabilities[i] += prediction[i]
+
     return predictions
 
 
@@ -223,12 +238,12 @@ class PiecewiseClassifier(ClassifierMixin, PiecewiseBase):
         lock = threading.Lock()
         Parallel(n_jobs=n_jobs, verbose=self.verbose,
                  **_joblib_parallel_args(require="sharedmem"))(
-            delayed(_accumulate_prediction)(e.predict_proba, X, all_probabilities,
-                                           lock, e, class_map)
-            for e in self.estimators_)
+            delayed(_predict_proba)(self, assigner, X, all_probabilities,
+                                    lock, self.estimators_[assigner], class_map)
+            for assigner in self.assigners)
 
         for probability in all_probabilities:
-            probability /= len(self.estimators_)
+            probability /= self.n_assigners
 
         if len(all_probabilities) == 1:
             all_probabilities = all_probabilities[0]
