@@ -13,7 +13,7 @@ from sklearn.utils.validation import check_is_fitted, _check_sample_weight
 
 from sklearn.ensemble import _forest as sk_forest
 
-from .utils import _build_sample_weight, GroupAssignment, MeanEstimator
+from .utils import _build_sample_weight, GroupAssignment, MeanEstimator, MeanClassifier, MeanRegressor
 
 
 def _parallel_fit_prediction_model(prediction_blank, fallback_blank, X, y, prediction_kwargs, sample_weight=None, **kwargs):
@@ -46,7 +46,18 @@ class PiecewiseBase(BaseEstimator):
     """
     assignment_estimator: BaseEstimator
     prediction_estimator: BaseEstimator
-    fallback_estimator: BaseEstimator = attr.Factory(u.MeanEstimator)
+
+    fallback_estimator: BaseEstimator = attr.ib()
+    @fallback_estimator.default
+    def _fallback_dispatch(self):
+        if isinstance(self, RegressorMixin):
+            model = MeanRegressor()
+        if isinstance(self, ClassifierMixin):
+            model = MeanClassifier()
+        else:
+            model = MeanEstimator()
+        return model 
+
     assignment_method: str = 'apply'
     n_jobs: int = 1
     random_state: Any = None
