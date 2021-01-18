@@ -6,7 +6,6 @@ from sklearn.base import ClassifierMixin, RegressorMixin
 from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier
 from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-# from sklearn.cluster import KMeans
 from sklearn.model_selection import train_test_split
 
 from sklearn.datasets import load_boston, load_iris

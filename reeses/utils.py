@@ -91,7 +91,7 @@ def package_arrays(arrs, shape):
     get `shape` attribute of values of dict if they are None and have length
 
     Args:
-        shape (dict): shape of 
+        shape (dict): shape of
 
     Returns:
         dict: keys of `dict_array` with lengths
@@ -155,7 +155,7 @@ class GroupAssignment:
         """
         Serve the stored for the group given keys (None / Falsey yields all)
         """
-        keys = key if keys else set(self.data)
+        keys = key if keys else self.data.keys()
         package = {key: package_arrays(_data[group], self.shapes[key])
                    for key, _data in self.data.items() if key in keys}
         return package
@@ -219,4 +219,8 @@ class MeanClassifier(ClassifierMixin, MeanEstimator):
 
     def predict_proba(self, X):
         output = np.ones((len(X), *self.mu_.shape)) * self.mu_
+        return output
+
+    def predict_log_proba(self, X):
+        output = np.log(self.predict_proba(X))
         return output
