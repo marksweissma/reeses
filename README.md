@@ -34,7 +34,7 @@ data = load_boston()
 X = data['data']
 y = data['target']
 
-tree = DecisionTreeRegressor(min_samples_leaf(10))
+tree = DecisionTreeRegressor(min_samples_leaf=10)
 ols = LinearRegression()
 
 model = PiecewiseRegressor(assignment_estimator=tree, prediction_estimator=ols)
@@ -56,7 +56,7 @@ data = load_iris()
 X = data['data']
 y = data['target']
 
-tree = DecisionTreeClassifier(min_samples_leaf(10))
+tree = DecisionTreeClassifier(min_samples_leaf=10)
 ols = LogisticRegression()
 
 model = PiecewiseClassifier(assignment_estimator=tree, prediction_estimator=ols)
