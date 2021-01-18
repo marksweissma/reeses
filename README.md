@@ -49,7 +49,7 @@ from sklearn.datasets import load_iris
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.linear_model import LogisticRegression
 
-from reeses import PiecewiseRegressor
+from reeses import PiecewiseClassifier
 
 data = load_iris()
 
@@ -59,6 +59,6 @@ y = data['target']
 tree = DecisionTreeClassifier(min_samples_leaf(10))
 ols = LogisticRegression()
 
-model = PiecewiseRegressor(assignment_estimator=tree, prediction_estimator=ols)
+model = PiecewiseClassifier(assignment_estimator=tree, prediction_estimator=ols)
 model.fit(X, y)
 ```
