@@ -214,8 +214,23 @@ class MeanClassifier(ClassifierMixin, MeanEstimator):
         return self
 
     def predict(self, X):
-        output = np.ones((len(X), *self.mu_.shape)) * self.mu_
-        return output
+        proba = self.predict_proba(X)
+
+        if self.n_outputs_ == 1:
+            predictions = self.classes_.take(np.argmax(proba, axis=1), axis=0)
+
+        else:
+            n_samples = proba[0].shape[0]
+            # all dtypes should be the same, so just take the first
+            class_type = self.classes_[0].dtype
+            predictions = np.empty((n_samples, self.n_outputs_),
+                                   dtype=class_type)
+
+            for k in range(self.n_outputs_):
+                predictions[:, k] = self.classes_[k].take(np.argmax(proba[k],
+                                                                    axis=1),
+                                                          axis=0)
+        return predictions
 
     def predict_proba(self, X):
         output = np.ones((len(X), *self.mu_.shape)) * self.mu_
