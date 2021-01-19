@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 
 setup(name='reeses',
-      version='0.0.1',
+      version='0.0.2',
       author='Mark Weiss',
       author_email='mark.s.weiss.ma@gmail.com',
       description=open('README.md'),
