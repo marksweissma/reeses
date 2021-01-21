@@ -53,7 +53,7 @@ class PiecewiseBase(BaseEstimator):
     def _fallback_dispatch(self):
         return _fallback_dispatch(self)
 
-    assignment_method: str = attr.ib()
+    assignment_method: str = attr.ib(validator=attr.validators.instance_of(str))
     @assignment_method.default
     def _get_assignment(self):
         return _get_assignment(self)
