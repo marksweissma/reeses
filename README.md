@@ -91,6 +91,7 @@ model.fit(X, y)
 ### clustering assignment
 
 reeses supports arbitary assignment estimators. scikit-learn clustering estimators
-use the `predict` method to make assignments. reeses defaults to the `apply` method
-but con be configured of any assignment through the `assignment_method` attribute 
+use the `predict` method to make assignments. <`0.0.3` reeses defaults to the `apply` method
+but con be configured of any assignment through the `assignment_method` attribute. >=`0.0.3`
+defaults to `apply` if assignment estimator has apply else `predict` if has predict else raises.
 
