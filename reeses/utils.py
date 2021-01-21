@@ -205,6 +205,8 @@ class MeanClassifier(ClassifierMixin, MeanEstimator):
 
         self.classes_ = np.sort(np.unique(y))
         self.n_classes_ = len(self.classes_)
+        self.n_outputs_ = y.shape[1] if y.ndim > 1 else 1
+
         sample_weight = np.ones_like(y) if sample_weight is None else sample_weight
         count = sample_weight.sum()
         groups = GroupAssignment.from_groups(y, weight=sample_weight)
