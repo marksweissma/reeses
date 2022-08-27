@@ -128,6 +128,8 @@ x_train = x_train[:, None]
 x_test = x_test[:, None]
 ```
 
+training data
+
 ![Training Data](/docs/source/images/reeses_train.png)
 
 create models
@@ -166,14 +168,20 @@ for name, estimator in models.items():
         predictions[name] = estimator.fit(x_train, y_train).predict(x_test)
 ```
 
+Test Data
+
 ![Test Data](/docs/source/images/reeses_test_data.png)
 
 Results! colorbar is magnitude of residuals
 
+OLS 
+
 ![OLS](/docs/source/images/reeses_ols.png)
+
+Decision Tree
 
 ![Decision Tree](/docs/source/images/reeses_tree.png)
 
+Piecewise Estimator
+
 ![Piecewise Decision Tree](/docs/source/images/reeses_piecewise_tree.png)
-
-
