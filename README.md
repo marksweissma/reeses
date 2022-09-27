@@ -98,9 +98,9 @@ defaults to `apply` if assignment estimator has apply else `predict` if has pred
 
 ### Example
 
-Consider `y = sign(x) * (1 + abs(x))` - a linear function with a shock at the origin. This function is a poor candidate for linear methods (will predict average of before and after the shock)
+Consider `y = sign(x) * (1 + abs(x))` - a linear function with a shock at the origin. This function is a poor candidate for linear methods (will learn the correct slope - if and only if befor and after the shock is balanced - and the incorrect intercept)
 and tree based methods (cannot interpolate outside the observed bounds). Combining the two we can
-produce an effective estimator.
+produce an effective estimator that can extrapolate.
 
 ```python
 import matplotlib.pyplot as plt
