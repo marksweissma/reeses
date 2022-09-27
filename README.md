@@ -5,7 +5,7 @@ reeses is a scikit-learn plugin for piecewise models with learned partitions.
 learned partitions or groups can be assigned through tree based or clustering models,
 the only requirements is the estimator can be fit on the data and exposes a method
 that can assign the appropriate id of the learned partition for new data. prediction
-estimators can be optimized within node / leaf through grid search if neccesary 
+estimators can be optimized within node / leaf through grid search if neccesary
 
 reeses tries to follow the utility patterns in scikit-learn i.e.
 
@@ -66,7 +66,7 @@ model.fit(X, y)
 ### ensembling & bootstrapping
 
 reeses will introspect ensemble assignment estimators and maintain the bootstrapped sample
-fit in each assignment estimator for prediction estimators associated with that assignment estimator. 
+fit in each assignment estimator for prediction estimators associated with that assignment estimator.
 
 ```python
 
@@ -98,7 +98,7 @@ defaults to `apply` if assignment estimator has apply else `predict` if has pred
 
 ### Example
 
-Consider `y = abs(x)`. This function is a poor candidate for linear methods (will predict a constant)
+Consider `y = sign(x) * (1 + abs(x))` - a linear function with a shock at the origin. This function is a poor candidate for linear methods (will predict average of before and after the shock)
 and tree based methods (cannot interpolate outside the observed bounds). Combining the two we can
 produce an effective estimator.
 
@@ -118,10 +118,14 @@ from reeses import pieces
 create data
 ```python
 observations = 10000
-x_train = np.hstack([np.random.uniform(0, 1, observations // 2),np.random.uniform(-1, 0, observations // 2)])
+x_train = np.random.uniform(-2, 2, observations)
 x_test = np.random.uniform(-2, 2, observations)
-y_train = np.abs(x_train) + norm.rvs(size=observations, loc=0, scale=.05)
-y_test = np.abs(x_test) + norm.rvs(size=observations, loc=0, scale=.05)
+y_train = np.sign(x_train) * (1 + np.abs(x_train)) + norm.rvs(size=observations, loc=0, scale=.05)
+y_test = np.sign(x_test) * (1 + np.abs(x_test)) + norm.rvs(size=observations, loc=0, scale=.05)
+
+# reshape arrays to 2D
+x_train = x_train[:, None]
+x_test = x_test[:, None]
 
 # reshape arrays to 2D
 x_train = x_train[:, None]
@@ -134,7 +138,7 @@ training data
 
 create models
 
-```python 
+```python
 models = {
     'ols':
     LinearRegression(),
@@ -172,9 +176,9 @@ Test Data
 
 ![Test Data](/docs/source/images/reeses_test_data.png)
 
-Results! colorbar is magnitude of residuals
+Results!
 
-OLS 
+OLS
 
 ![OLS](/docs/source/images/reeses_ols.png)
 
