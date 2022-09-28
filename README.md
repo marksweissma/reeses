@@ -99,7 +99,7 @@ defaults to `apply` if assignment estimator has apply else `predict` if has pred
 ### Example
 
 Consider `y = sign(x) * (1 + abs(x))` - a linear function with a shock at the origin. This function is a poor candidate for linear methods (nonlinear function)
-and tree based methods (cannot interpolate outside the observed bounds). Combining the two we can
+and tree based methods (cannot extrapolate outside the observed bounds). Combining the two we can
 produce an effective estimator that can extrapolate.
 
 ```python
